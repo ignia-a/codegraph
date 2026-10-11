@@ -1414,6 +1414,11 @@ export class TreeSitterExtractor {
     // Check for imports
     else if (this.extractor.importTypes.includes(nodeType)) {
       this.extractImport(node);
+      // Ruby declares `call` as BOTH an import type (require/require_relative) and a
+      // call type, and this branch shadows the call branch below — so a call in a
+      // class-level block (`normalizes :x, with: ->(v) { Ns::Fmt.call(v) }`, a
+      // serializer `attribute :x do ... end`) was never extracted as a call.
+      if (this.language === 'ruby' && nodeType === 'call') this.extractCall(node);
     }
     // Re-export from another module — `export { X } from './y'` (TS/JS). A
     // re-export is a dependency on the source module just like an import, but
@@ -4425,10 +4430,13 @@ export class TreeSitterExtractor {
       // — is itself a dependency on that constant; emit a `references` ref so a
       // class used only via its class methods still records a dependent (the edge
       // the old receiver-only callee happened to provide, now made explicit).
-      if (!skip && receiverNode.type === 'constant') {
+      // A namespaced receiver (`Billing::ChargeCard.call`) is a `scope_resolution`,
+      // not a `constant` — the dominant Rails service/command call shape. A leading
+      // `::` (global scope) is stripped so the qualified-name resolver can match it.
+      if (!skip && (receiverNode.type === 'constant' || receiverNode.type === 'scope_resolution')) {
         this.unresolvedReferences.push({
           fromNodeId: callerId,
-          referenceName: receiverName,
+          referenceName: receiverName.replace(/^::/, ''),
           referenceKind: 'references',
           line: receiverNode.startPosition.row + 1,
           column: receiverNode.startPosition.column,
